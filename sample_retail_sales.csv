@@ -1,0 +1,17 @@
+Month,Category,Region,Units_Sold,Revenue,Marketing_Spend,Customer_Satisfaction
+2025-01,Electronics,North,420,84000,12000,4.5
+2025-02,Apparel,South,610,36600,5500,4.2
+2025-03,Home & Living,East,340,44200,6800,4.6
+2025-04,Electronics,West,490,98000,14500,4.7
+2025-05,Apparel,North,720,43200,6200,4.3
+2025-06,Home & Living,South,390,50700,7400,4.4
+2025-07,Electronics,East,530,106000,15200,4.8
+2025-08,Apparel,West,680,40800,5900,4.5
+2025-09,Home & Living,North,410,53300,7900,4.5
+2025-10,Electronics,South,610,122000,18000,4.9
+2025-10,Electronics,South,610,122000,18000,4.9
+2025-11,Apparel,East,890,53400,8500,4.6
+2025-12,Electronics,West,780,156000,22500,4.9
+2026-01,Home & Living,North,460,59800,8200,4.7
+2026-02,Electronics,South,650,130000,19000,4.8
+2026-03,Apparel,West,740,44400,6400,4.5
