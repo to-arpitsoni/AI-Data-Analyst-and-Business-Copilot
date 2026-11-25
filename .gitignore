@@ -1,7 +1,10 @@
 node_modules/
 dist/
 .runtime/
+__pycache__/
+*.py[cod]
 .env
 .env.*
 !.env.example
+.streamlit/secrets.toml
 npm-debug.log*

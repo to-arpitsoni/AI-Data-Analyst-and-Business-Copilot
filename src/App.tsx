@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   BarChart, Bar, LineChart, Line, ScatterChart, Scatter, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, ComposedChart
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart
 } from 'recharts';
 import {
   Upload, Database, Sparkles, TrendingUp, BarChart3, CheckCircle2,
@@ -9,6 +9,8 @@ import {
   PieChart as PieChartIcon, Activity, ShieldCheck, ArrowUpRight, ArrowDownRight,
   Table as TableIcon, BrainCircuit, ChevronRight, Cpu, Sun, Moon
 } from 'lucide-react';
+import { parseCSV } from './data/csv.js';
+import { computeForecast } from './data/forecast.js';
 
 // --- SAMPLE DATASETS FOR IMMEDIATE DEMO ---
 const SAMPLE_DATASETS = {
@@ -70,26 +72,7 @@ Oct,Cardiology,270,3.9,405000,5600,93.2`
 
 const CHART_COLORS = ['#3B5BFD', '#1E40AF', '#10B981', '#F59E0B', '#6366F1', '#0EA5E9'];
 
-// --- CSV PARSER & DATA ENGINE (PHASE 1, 2, 3, 6) ---
-function parseCSV(csvText) {
-  const lines = csvText.trim().split(/\r?\n/).filter(line => line.trim() !== '');
-  if (lines.length < 2) return { headers: [], rows: [] };
-
-  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-  const rows = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
-    const rowObj = {};
-    headers.forEach((h, idx) => {
-      const val = values[idx] !== undefined ? values[idx] : '';
-      rowObj[h] = val;
-    });
-    rows.push(rowObj);
-  }
-  return { headers, rows };
-}
-
+// --- DATA ENGINE (PHASE 1, 2, 3) ---
 function runPreprocessingAndStats(headers, rawRows) {
   const initialRowCount = rawRows.length;
 
@@ -248,85 +231,6 @@ function runPreprocessingAndStats(headers, rawRows) {
     },
     stats,
     correlations
-  };
-}
-
-// --- PHASE 6: LINEAR REGRESSION FORECASTING ENGINE ---
-function computeForecast(rows, labelCol, targetCol, horizon = 4) {
-  const n = rows.length;
-  if (n < 2 || !targetCol) return null;
-
-  const points = rows.map((r, idx) => ({
-    x: idx + 1,
-    label: labelCol ? String(r[labelCol]) : `Period ${idx + 1}`,
-    actual: Number(r[targetCol]) || 0
-  }));
-
-  // Ordinary Least Squares (OLS) Linear Regression: y = m*x + b
-  const sumX = points.reduce((acc, p) => acc + p.x, 0);
-  const sumY = points.reduce((acc, p) => acc + p.actual, 0);
-  const sumXY = points.reduce((acc, p) => acc + p.x * p.actual, 0);
-  const sumXX = points.reduce((acc, p) => acc + p.x * p.x, 0);
-
-  const denominator = n * sumXX - sumX * sumX;
-  const slope = denominator !== 0 ? (n * sumXY - sumX * sumY) / denominator : 0;
-  const intercept = (sumY - slope * sumX) / n;
-
-  // Calculate R-squared and Residual Standard Error
-  const meanY = sumY / n;
-  let ssTot = 0;
-  let ssRes = 0;
-
-  const combinedSeries = points.map(p => {
-    const trend = slope * p.x + intercept;
-    ssTot += Math.pow(p.actual - meanY, 2);
-    ssRes += Math.pow(p.actual - trend, 2);
-    return {
-      period: p.label,
-      actual: p.actual,
-      trend: Number(trend.toFixed(2)),
-      forecast: null,
-      upperBound: null,
-      lowerBound: null
-    };
-  });
-
-  const rSquared = ssTot > 0 ? Math.max(0, Math.min(1, 1 - ssRes / ssTot)) : 0;
-  const stdError = n > 2 ? Math.sqrt(ssRes / (n - 2)) : meanY * 0.08;
-
-  // Connect last actual point to forecast line smoothly
-  combinedSeries[combinedSeries.length - 1].forecast = combinedSeries[combinedSeries.length - 1].actual;
-
-  const futurePredictions = [];
-  for (let h = 1; h <= horizon; h++) {
-    const futureX = n + h;
-    const predicted = Math.max(0, slope * futureX + intercept);
-    const margin = 1.28 * stdError * Math.sqrt(1 + 1 / n); // ~80% confidence interval
-    const periodName = `Forecast +${h}`;
-
-    const entry = {
-      period: periodName,
-      actual: null,
-      trend: Number(predicted.toFixed(2)),
-      forecast: Number(predicted.toFixed(2)),
-      upperBound: Number((predicted + margin).toFixed(2)),
-      lowerBound: Number(Math.max(0, predicted - margin).toFixed(2))
-    };
-    combinedSeries.push(entry);
-    futurePredictions.push(entry);
-  }
-
-  const lastActual = points[points.length - 1].actual;
-  const finalForecast = futurePredictions[futurePredictions.length - 1].forecast;
-  const projectedGrowthPct = lastActual !== 0 ? ((finalForecast - lastActual) / Math.abs(lastActual)) * 100 : 0;
-
-  return {
-    slope: Number(slope.toFixed(2)),
-    intercept: Number(intercept.toFixed(2)),
-    rSquared: Number(rSquared.toFixed(3)),
-    projectedGrowthPct: Number(projectedGrowthPct.toFixed(1)),
-    combinedSeries,
-    futurePredictions
   };
 }
 
@@ -595,7 +499,7 @@ function answerDataQuestionRealTime(question, datasetTitle, analysis, forecastDa
     const customForecast = computeForecast(cleanedRows, labelCol, targetCol, horizon);
     if (customForecast) {
       const predLines = customForecast.futurePredictions
-        .map(fp => `- **${fp.period}:** **${fp.forecast.toLocaleString()}** (80% CI: ${fp.lowerBound.toLocaleString()} – ${fp.upperBound.toLocaleString()})`)
+        .map(fp => `- **${fp.period}:** **${fp.forecast.toLocaleString()}** (approx. 80% prediction range: ${fp.lowerBound.toLocaleString()} – ${fp.upperBound.toLocaleString()})`)
         .join('\n');
       return `**Real-Time OLS Regression Forecast for ${targetCol}**\n\n- **Trend Slope:** **${customForecast.slope >= 0 ? '+' : ''}${customForecast.slope.toLocaleString()}** per period\n- **Model Fit (R²):** **${customForecast.rSquared}** (${Math.round(customForecast.rSquared * 100)}% variance explained)\n- **Projected ${horizon}-Period Growth:** **${customForecast.projectedGrowthPct >= 0 ? '+' : ''}${customForecast.projectedGrowthPct}%**\n\n**Projected Future Values:**\n${predLines}`;
     }
@@ -713,68 +617,38 @@ function answerDataQuestionRealTime(question, datasetTitle, analysis, forecastDa
   return `I took a look at **${datasetTitle}** regarding *"${question.trim()}"*. Here is what stands out right away:\n\n- **${targetCol} Performance:** Across **${preprocessingReport.finalRowCount} clean records**, **${targetCol}** averages **${primaryStat?.mean.toLocaleString()}** (totaling **${primaryStat?.sum.toLocaleString()}**, ranging from **${primaryStat?.min.toLocaleString()}** to **${primaryStat?.max.toLocaleString()}**).\n${topSeg ? `- **Top Performer:** **${topSeg.name}** (${topSeg.dimension}) leads with **${topSeg.total.toLocaleString()}** total **${targetCol}**.\n` : ''}${topCorr ? `- **Key Relationship:** **${topCorr.pair}** moves together with a correlation of **r = ${topCorr.r}**.\n` : ''}\nIf you meant something more specific—like filtering a certain ${groupCol || 'category'}, checking top/bottom rows, or forecasting future periods—just tell me which column or group you want to focus on!`;
 }
 
-// --- GEMINI API CLIENT WITH BACKGROUND KEY BINDING & REAL-TIME FALLBACK ---
-function getBackgroundGeminiKey() {
-  try {
-    if (typeof window !== 'undefined' && window.__GEMINI_API_KEY__) {
-      return String(window.__GEMINI_API_KEY__).trim();
-    }
-  } catch (_) {}
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) {
-      return String(import.meta.env.VITE_GEMINI_API_KEY).trim();
-    }
-  } catch (_) {}
-  try {
-    if (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) {
-      return String(process.env.GEMINI_API_KEY).trim();
-    }
-  } catch (_) {}
-  return '';
-}
-
+// --- SERVER-SIDE GEMINI CLIENT WITH LOCAL ANALYTICAL FALLBACK ---
 async function queryGeminiOrFallback({
   contents,
   systemInstruction,
   onFallback
 }) {
-  const apiKey = getBackgroundGeminiKey();
-  const models = ['gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.5-flash-lite'];
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
 
-  for (const model of models) {
-    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    const apiUrl = apiKey ? `${baseUrl}?key=${encodeURIComponent(apiKey)}` : baseUrl;
-    const payload = {
-      contents,
-      systemInstruction: {
-        parts: [{ text: systemInstruction }]
-      }
-    };
+  try {
+    const response = await fetch('/api/gemini', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents, systemInstruction }),
+      signal: controller.signal
+    });
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        const result = await response.json();
-        const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text && text.trim()) {
-          return { text: text.trim(), source: 'gemini', model };
-        }
-      }
-    } catch (_) {
-      // Silently proceed to next active Gemini model or real-time query engine
+    if (!response.ok) {
+      throw new Error(`AI endpoint returned HTTP ${response.status}`);
     }
+
+    const result = await response.json();
+    if (typeof result.text !== 'string' || !result.text.trim()) {
+      throw new Error('AI endpoint returned an empty response');
+    }
+    return { text: result.text.trim(), source: 'gemini', model: result.model || 'Gemini' };
+  } catch (error) {
+    console.warn(`Using local analysis because AI is unavailable: ${error.message}`);
+  } finally {
+    clearTimeout(timeoutId);
   }
 
-  // Seamless real-time query-aware analytical engine fallback
   const fallbackText = onFallback();
   return { text: fallbackText, source: 'local', model: 'Real-Time Data Analyst Engine' };
 }
@@ -916,7 +790,6 @@ export default function App() {
   // Run Phases 1, 2, 3 Pipeline
   const analysis = useMemo(() => {
     const { headers, rows } = parseCSV(rawCSV);
-    if (!headers.length || !rows.length) return null;
     return runPreprocessingAndStats(headers, rows);
   }, [rawCSV]);
 
@@ -962,13 +835,28 @@ export default function App() {
 
     if (!file.name.toLowerCase().endsWith('.csv') && !file.name.toLowerCase().endsWith('.txt')) {
       setUploadError('Please upload a valid .CSV file (Excel files can be saved as CSV UTF-8).');
+      e.target.value = '';
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setUploadError('CSV files must be 10 MB or smaller.');
+      e.target.value = '';
       return;
     }
 
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result;
-      if (typeof content === 'string' && content.trim().length > 0) {
+      if (typeof content === 'string') {
+        try {
+          parseCSV(content);
+        } catch (error) {
+          setUploadError(error.message);
+          e.target.value = '';
+          return;
+        }
+
         const cleanTitle = file.name.replace(/\.[^/.]+$/, '');
         setDatasetKey('custom');
         setDatasetTitle(cleanTitle);
@@ -985,8 +873,12 @@ export default function App() {
       } else {
         setUploadError('The uploaded file appears to be empty.');
       }
+      e.target.value = '';
     };
-    reader.onerror = () => setUploadError('Failed to read the uploaded file.');
+    reader.onerror = () => {
+      setUploadError('Failed to read the uploaded file.');
+      e.target.value = '';
+    };
     reader.readAsText(file);
   };
 
@@ -1014,6 +906,7 @@ export default function App() {
             slopePerPeriod: forecastData.slope,
             rSquared: forecastData.rSquared,
             projectedGrowthPct: forecastData.projectedGrowthPct,
+            walkForwardBacktest: forecastData.backtest,
             nextPeriods: forecastData.futurePredictions
           }
         : null,
@@ -1155,8 +1048,9 @@ ${buildDatasetSummaryPrompt()}`;
             `Target Metric: ${forecastTarget}`,
             `Linear Trend Slope: ${forecastData.slope} / period | R-Squared: ${forecastData.rSquared}`,
             `Projected Growth: ${forecastData.projectedGrowthPct}%`,
+            `Walk-forward backtest (${forecastData.backtest.periods} periods): MAE=${forecastData.backtest.mae ?? 'N/A'}, MAPE=${forecastData.backtest.mape === null ? 'N/A' : `${forecastData.backtest.mape}%`}`,
             ...forecastData.futurePredictions.map(
-              fp => `${fp.period}: Predicted = ${fp.forecast} (80% CI: ${fp.lowerBound} - ${fp.upperBound})`
+              fp => `${fp.period}: Predicted = ${fp.forecast} (approx. 80% prediction range: ${fp.lowerBound} - ${fp.upperBound})`
             )
           ]
         : ['Forecast not computed']),
@@ -1970,7 +1864,7 @@ ${buildDatasetSummaryPrompt()}`;
               {forecastData && (
                 <>
                   {/* Model Metrics Strip */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 my-5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 my-5">
                     <div className={`p-4 rounded-xl border ${isDark ? 'bg-[#12141A] border-[#262A34]' : 'bg-[#F7F7F5] border-[#E4E4DF]'}`}>
                       <span className="text-xs font-semibold text-slate-500">Regression Slope (Velocity)</span>
                       <div className={`text-xl font-extrabold mt-1 ${isDark ? 'text-[#F7F7F5]' : 'text-[#1C1F26]'}`}>
@@ -1991,6 +1885,17 @@ ${buildDatasetSummaryPrompt()}`;
                         {forecastData.projectedGrowthPct >= 0 ? '+' : ''}{forecastData.projectedGrowthPct}%
                       </div>
                     </div>
+
+                    <div className={`p-4 rounded-xl border ${isDark ? 'bg-[#12141A] border-[#262A34]' : 'bg-[#F7F7F5] border-[#E4E4DF]'}`}>
+                      <span className="text-xs font-semibold text-slate-500">Walk-forward Backtest MAE</span>
+                      <div className={`text-xl font-extrabold mt-1 ${isDark ? 'text-[#F7F7F5]' : 'text-[#1C1F26]'}`}>
+                        {forecastData.backtest.mae === null ? 'N/A' : forecastData.backtest.mae.toLocaleString()}
+                      </div>
+                      <span className="text-xs text-slate-500">
+                        {forecastData.backtest.periods} held-out period{forecastData.backtest.periods === 1 ? '' : 's'}
+                        {forecastData.backtest.mape === null ? '' : ` • ${forecastData.backtest.mape}% MAPE`}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Forecast Chart */}
@@ -2002,13 +1907,23 @@ ${buildDatasetSummaryPrompt()}`;
                         <YAxis tick={{ fontSize: 12, fill: tickFill }} />
                         <Tooltip contentStyle={tooltipStyle} />
                         <Legend />
-                        <Area
+                        <Line
+                          type="monotone"
+                          dataKey="lowerBound"
+                          name="Approx. 80% Prediction Lower"
+                          stroke="#8091F8"
+                          strokeDasharray="3 4"
+                          strokeWidth={1.5}
+                          dot={false}
+                        />
+                        <Line
                           type="monotone"
                           dataKey="upperBound"
-                          name="80% Confidence Upper"
-                          stroke="none"
-                          fill="#3B5BFD"
-                          fillOpacity={isDark ? 0.25 : 0.16}
+                          name="Approx. 80% Prediction Upper"
+                          stroke="#8091F8"
+                          strokeDasharray="3 4"
+                          strokeWidth={1.5}
+                          dot={false}
                         />
                         <Line
                           type="monotone"
@@ -2046,8 +1961,8 @@ ${buildDatasetSummaryPrompt()}`;
                         <tr className={`border-b ${isDark ? 'border-[#262A34] text-slate-400' : 'border-[#E4E4DF] text-slate-500'}`}>
                           <th className="py-2.5 px-3 font-bold">Future Horizon</th>
                           <th className="py-2.5 px-3 font-bold">Point Forecast ({forecastTarget})</th>
-                          <th className="py-2.5 px-3 font-bold">Lower Bound (80% CI)</th>
-                          <th className="py-2.5 px-3 font-bold">Upper Bound (80% CI)</th>
+                          <th className="py-2.5 px-3 font-bold">Approx. 80% Lower Range</th>
+                          <th className="py-2.5 px-3 font-bold">Approx. 80% Upper Range</th>
                         </tr>
                       </thead>
                       <tbody className={`divide-y ${isDark ? 'divide-[#262A34]' : 'divide-[#ECECE7]'}`}>
